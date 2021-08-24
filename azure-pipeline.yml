@@ -1,0 +1,102 @@
+pool: 
+  name: ec2-agents
+variables:
+- group: azure-credentials
+
+parameters:
+- name: SERVICE_NAME
+  type: string
+- name: draft_pack_version 
+  type: string 
+
+stages:
+- stage: CreateService
+  displayName:  Create New Service
+  jobs: 
+  - job: CheckServiceAvaiabilty
+    displayName: check Service Avaiability
+    container:
+      image: mohamedhani/azure
+      env: 
+        AZURE_DEVOPS_EXT_PAT: $(AZURE_ACCESS_KEY)
+    workspace:
+      clean: all
+    steps:
+    - script:  | 
+        az config set extension.use_dynamic_install=yes_without_prompt
+        az repos  show --repository ${{ parameters.SERVICE_NAME }}  --project $(PROJECT_NAME) --org https://dev.azure.com/$(ORGANIZATION_NAME)
+        
+        if [ $? -eq 0 ]
+        then
+          echo "this repository exist before"
+          exit 1
+        else
+          echo "new repository"
+          exit 0
+        fi
+      displayName: CheckServiceAvaiabilty
+
+  - job: cloneServicePack
+    displayName: Clone Service Pack
+    dependsOn: CheckServiceAvaiabilty
+    container:
+      image: mohamedhani/azure
+      env: 
+        AZURE_DEVOPS_EXT_PAT: $(AZURE_ACCESS_KEY)
+    steps:
+    - checkout: none
+    - script: |
+        yq eval -i '{.variables[0].value= ${{ parameters.SERVICE_NAME }} }'  ${{ parameters.SERVICE_NAME }}/azure-pipeline.yaml
+        mvn archetype:generate -B -DarchetypeArtifactId= maven-archetype-archetype   -DarchetypeVersion=1.0     -DgroupId=com.vodafone -DartifactId=${{ parameters.SERVICE_NAME }} 
+        mv service service_draftpack/*  ${{ parameters.SERVICE_NAME }}/
+      displayName: Init Service
+
+  - job: CreateServiceRepository
+    displayName: Create Service Repository
+    dependsOn: cloneServicePackAZURE_ACCESS_KEY
+    container:
+      image: mohamedhani/azure
+      env: 
+        AZURE_DEVOPS_EXT_PAT: $(AZURE_ACCESS_KEY)
+    steps:
+    - checkout: none  
+    - script: |
+        az config set extension.use_dynamic_install=yes_without_prompt
+        az repos  list --project learning --org https://dev.azure.com/$(ORGANIZATION_NAME) --query "[].[name]"  --output table  | grep -E "^service-draf-pack$"
+        az repos create --name  ${{ parameters.SERVICE_NAME }} --project  $(PROJECT_NAME) --org https://dev.azure.com/$(ORGANIZATION_NAME)
+      displayName: Create draft pack versionRepository
+    - script: |
+        cd ${{ parameters.SERVICE_NAME }}
+        git config --global user.email "$(GIT_EMAIL)"
+        git config --global user.name  "$(GIT_USERNAME)"
+        git init
+        git add *
+        git commit -m "init service"
+        git remote add origin https://$(GIT_USERNAME):$(GIT_PASSWORD)@dev.azure.com/$(ORGANIZATION_NAME)/$(PROJECT_NAME)/_git/${{ parameters.SERVICE_NAME }}
+        git push -u origin  --all
+      workingDirectory:  ./${{ parameters.SERVICE_NAME }}
+      displayName: Push Service
+
+  - job: CreateServicePipeline
+    displayName: Create Service Pipeline
+    dependsOn: CreateServiceRepository
+    workspace:
+      clean: all
+    container:
+      image: mohamedhani/azure
+      env: 
+        AZURE_DEVOPS_EXT_PAT: $(AZURE_ACCESS_KEY)
+    steps:
+    - checkout: none
+    - script:  | 
+        az config set extension.use_dynamic_install=yes_without_prompt
+        az repos  list --project learning --org https://dev.azure.com/$(ORGANIZATION_NAME) --query "[].[name]"  --output table  | grep -E "^service-draf-pack$"
+        az pipelines create --name ${{ parameters.SERVICE_NAME }}-pipeline  --repository ${{ parameters.SERVICE_NAME }} --branch master --repository-type tfsgit --yaml-path azure-pipline.yaml --project  $(PROJECT_NAME) --org https://dev.azure.com/$(ORGANIZATION_NAME)  
+      displayName: Create Pipeline
+
+
+      
+
+
+     
+ 
